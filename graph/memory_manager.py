@@ -2,7 +2,7 @@
 import os, json, time
 from typing import Dict, List
 
-MEM_DIR = "memory"
+MEM_DIR = "data/memory"
 os.makedirs(MEM_DIR, exist_ok=True)
 
 def _mem_path(session_id: str) -> str:

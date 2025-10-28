@@ -21,7 +21,7 @@ embeddings = OllamaEmbeddings(model=embedding_model)
 def load_documents(state: Dict):
     """加载 session 的上传文档"""
     session_id = state.get("session_id", "default")
-    data_dir = os.path.join("data", session_id)
+    data_dir = os.path.join("data/uploaded_files", session_id)
     docs = []
     if os.path.exists(data_dir):
         for fn in os.listdir(data_dir):
@@ -36,7 +36,7 @@ def load_documents(state: Dict):
 def build_vector_index(state: Dict):
     """构建或加载 FAISS 索引"""
     session_id = state.get("session_id", "default")
-    vs_dir = os.path.join("vectorstore", f"{session_id}_faiss")
+    vs_dir = os.path.join("data/vectorstore", f"{session_id}_faiss")
     docs = state.get("documents", [])
     if not docs:
         return {}
@@ -69,7 +69,7 @@ def retrieve_context(state: Dict):
     """FAISS 检索上下文 + memory hits"""
     session_id = state.get("session_id", "default")
     q = state.get("question", "")
-    vs_dir = state.get("vector_index_path", os.path.join("vectorstore", f"{session_id}_faiss"))
+    vs_dir = state.get("vector_index_path", os.path.join("data/vectorstore", f"{session_id}_faiss"))
     retrieved = []
 
     if os.path.exists(vs_dir):

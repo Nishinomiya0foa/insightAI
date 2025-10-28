@@ -25,7 +25,7 @@ async def upload_files(session_id: str = Form(None), files: list[UploadFile] = F
     """
     if session_id is None:
         session_id = str(uuid.uuid4())[:8]
-    dest_dir = os.path.join("data", session_id)
+    dest_dir = os.path.join("data/uploaded_files", session_id)
     os.makedirs(dest_dir, exist_ok=True)
     for f in files:
         file_path = os.path.join(dest_dir, f.filename)
