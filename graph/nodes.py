@@ -11,11 +11,11 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain.messages import HumanMessage
 
 from .memory_manager import init_session, append_session, query_session_keywords
-from config import model, open_api_key, api_base_url
+from config import model, open_api_key, api_base_url, embedding_model
 
 
 llm = ChatOpenAI(model=model, temperature=0, api_key=open_api_key, openai_api_base=api_base_url)
-embeddings = OllamaEmbeddings(model="llama3-groq-tool-use:latest")
+embeddings = OllamaEmbeddings(model=embedding_model)
 
 
 def load_documents(state: Dict):
