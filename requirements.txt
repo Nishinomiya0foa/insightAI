@@ -1,3 +1,15 @@
-langchain
-langchain-openai
+fastapi
+uvicorn[standard]
+gradio
+requests
+langchain>=1.0.0
 langgraph
+langchain-openai
+faiss-cpu
+tiktoken
+python-multipart
+langchain-community
+PyPDF2
+python-docx
+pandas
+
