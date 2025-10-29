@@ -1,4 +1,5 @@
-# core/graph_builder.py
+from typing import Dict
+
 from langgraph.graph import StateGraph, START, END
 from .state_schema import InsightState
 from .nodes import (
@@ -6,6 +7,11 @@ from .nodes import (
     retrieve_context, generate_answer, infer_intent,
     suggest_action, memory_write
 )
+
+def has_feedback(state: Dict) -> bool:
+    """判断用户是否提供了反馈意见"""
+    fb = state.get("feedback", "")
+    return bool(fb and fb.strip())
 
 def build_graph():
     graph = StateGraph(InsightState)
@@ -19,7 +25,14 @@ def build_graph():
     graph.add_node("suggest", suggest_action)
     graph.add_node("mem_write", memory_write)
 
-    graph.add_edge(START, "load_docs")
+    graph.add_conditional_edges(
+        START,
+        has_feedback,
+        {
+            True: "mem_read",
+            False: "load_docs"
+        }
+    )
     graph.add_edge("load_docs", "build_index")
     graph.add_edge("build_index", "mem_read")
     graph.add_edge("mem_read", "retrieve")

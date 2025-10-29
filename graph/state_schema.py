@@ -12,3 +12,4 @@ class InsightState(TypedDict, total=False):
     suggestion: str
     memory_hits: List[Dict]
     new_memory_entry: Dict
+    feedback: Optional[str]
