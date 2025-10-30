@@ -1,5 +1,6 @@
-# core/state_schema.py
 from typing import TypedDict, List, Optional, Dict
+from pydantic import BaseModel, Field
+
 
 class InsightState(TypedDict, total=False):
     session_id: str
@@ -15,3 +16,7 @@ class InsightState(TypedDict, total=False):
     feedback: Optional[str]
     satisfied: bool
     feedbacks: List[str]
+
+
+class IntentResult(BaseModel):
+    intents: List[str] = Field(..., description="推测的用户的下一步可能的提问")

@@ -1,11 +1,12 @@
 # api/main_api.py
 import os, uuid, shutil
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from graph.graph_builder import build_graph
 from graph.memory_manager import init_session, append_session, save_feedback_memory
 import aiofiles
+from utils.agent_utils import log_queue_manager
 
 from .param_schema import FeedbackRequest
 
@@ -57,6 +58,21 @@ async def ask_question(session_id: str = Form(...), question: str = Form(...)):
     return JSONResponse(resp)
 
 
+@app.get("/get_progress")
+async def get_progress(session_id):
+    # 返回流式日志响应
+    async def event_stream():
+        queue = log_queue_manager.get_queue(session_id)
+        while True:
+            log = await queue.get()  # 从队列获取日志
+            if log is None:
+                log_queue_manager.remove_queue(session_id)
+                break
+            yield log + "\n"  # 每次 yield 返回一个新的日志行
+
+    return StreamingResponse(event_stream(), media_type="text/plain")
+
+
 @app.post("/feedback")
 async def user_feedback(item: FeedbackRequest):
     """
@@ -72,7 +88,7 @@ async def user_feedback(item: FeedbackRequest):
         "question": regenerated_answer.get("question", ""),
         "context": regenerated_answer.get("context",""),
         "answer": regenerated_answer.get("answer",""),
-        "user_intent": regenerated_answer.get("user_intent",""),
-        "suggestion": regenerated_answer.get("suggestion",""),
+        "user_intent": regenerated_answer.get("user_intent",[]),
+        # "suggestion": regenerated_answer.get("suggestion",""),
     }
     return JSONResponse(resp)

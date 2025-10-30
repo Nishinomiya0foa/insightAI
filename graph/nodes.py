@@ -3,26 +3,28 @@ import os
 import time
 from typing import Dict
 
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_core.output_parsers import JsonOutputParser
 from langchain.messages import HumanMessage
+from langchain_core.prompts import PromptTemplate
 
 from .memory_manager import (
     init_session, append_session, query_session_keywords, save_feedback_memory, find_last_qa,
     load_feedback_memory)
 from config import model, open_api_key, api_base_url, embedding_model
 from utils.agent_utils import make_prompt, log_node_entry
+from .state_schema import IntentResult
 
 
 llm = ChatOpenAI(model=model, temperature=0, api_key=open_api_key, openai_api_base=api_base_url)
 embeddings = OllamaEmbeddings(model=embedding_model)
 
 
-@log_node_entry("load_documents")
-def load_documents(state: Dict):
+@log_node_entry("load_documents", "解析上传的文档")
+async def load_documents(state: Dict):
     """加载 session 的上传文档"""
     
     session_id = state.get("session_id", "default")
@@ -38,8 +40,8 @@ def load_documents(state: Dict):
     return {"documents": docs}
 
 
-@log_node_entry("build_vector_index")
-def build_vector_index(state: Dict):
+@log_node_entry("build_vector_index", "构建向量数据索引")
+async def build_vector_index(state: Dict):
     """构建或加载 FAISS 索引"""
     
     session_id = state.get("session_id", "default")
@@ -61,8 +63,8 @@ def build_vector_index(state: Dict):
     return {"vector_index_path": vs_dir}
 
 
-@log_node_entry("memory_read")
-def memory_read(state: Dict):
+@log_node_entry("memory_read", "匹配过往记忆")
+async def memory_read(state: Dict):
     """简单关键词匹配记忆"""
     
     session_id = state.get("session_id", "default")
@@ -74,8 +76,8 @@ def memory_read(state: Dict):
     return {"memory_hits": hits}
 
 
-@log_node_entry("feedback_read")
-def feedback_read(state: Dict):
+@log_node_entry("feedback_read", "结合过往反馈")
+async def feedback_read(state: Dict):
     """统计历史反馈"""
     
     session_id = state.get("session_id")
@@ -88,8 +90,8 @@ def feedback_read(state: Dict):
     return {"feedbacks": feedbacks}
 
 
-@log_node_entry("retrieve_context")
-def retrieve_context(state: Dict):
+@log_node_entry("retrieve_context", "提炼问题相关上下文")
+async def retrieve_context(state: Dict):
     """
     根据feedback或question的内容, 获取向量结果
     """
@@ -100,7 +102,7 @@ def retrieve_context(state: Dict):
 
     if os.path.exists(vs_dir):
         vectorstore = FAISS.load_local(vs_dir, embeddings, allow_dangerous_deserialization=True)
-        docs = vectorstore.similarity_search(q, k=3)
+        docs = await vectorstore.asimilarity_search(q, k=3)
         retrieved = [d.page_content for d in docs]
 
     if not retrieved:
@@ -114,8 +116,8 @@ def retrieve_context(state: Dict):
     return {"retrieved_docs": retrieved, "context": state["context"]}
 
 
-@log_node_entry("generate_answer")
-def generate_answer(state: Dict):
+@log_node_entry("generate_answer", "生成回答中, 可能用时几十秒")
+async def generate_answer(state: Dict):
     """根据上下文生成回答，支持多轮记忆"""
     q = state.get("question", "")
     context = state.get("context", "")
@@ -124,9 +126,8 @@ def generate_answer(state: Dict):
     append_session(state.get("session_id"), "user", q)
 
     prompt = make_prompt(state)
-    # TODO few-shot之类 和 历史问答
     messages = [[HumanMessage(content=prompt)]]
-    resp = llm.generate(messages)
+    resp = await llm.agenerate(messages)
     answer = resp.generations[0][0].text
 
     state["answer"] = answer
@@ -134,35 +135,45 @@ def generate_answer(state: Dict):
     return {"answer": answer, "new_memory_entry": state["new_memory_entry"]}
 
 
-@log_node_entry("infer_intent")
-def infer_intent(state: Dict):
+@log_node_entry("infer_intent", "推断用户深层需求, 可能用时几十秒")
+async def infer_intent(state: Dict):
     """推断用户意图"""
     q = state.get("question", "")
     context = state.get("context", "")
-    prompt = f"根据用户问题和上下文，推断用户的深层意图或真实需求, 或预测用户的下一步问题（1-2 句）：\n问题：{q}\n上下文：{context}"
+    answer = state.get("answer", "")
+    parser = JsonOutputParser(pydantic_object=IntentResult)
+    prompt = PromptTemplate(
+        template=("""
+用户前面的问题：{q}\n
+之前的回答:{answer}\n
+上下文：{context}\n
+根据用户问题、回答和上下文，推断用户的深层意图或真实需求, 预测用户的接下来可能的问题（1-3个）：\n
+{intent}
+"""),
+        input_variables=...,
+        partial_variables={"intent": parser.get_format_instructions()}
+    )
+    chain = prompt | llm | parser
+    resp = await chain.ainvoke({"q": q, "answer": answer, "context": context})
+    state["user_intent"] = resp.get("intents")
+    return {"user_intent": resp.get("intents")}
 
-    messages = [[HumanMessage(content=prompt)]]
-    resp = llm.generate(messages)
-    intent = resp.generations[0][0].text
-    state["user_intent"] = intent
-    return {"user_intent": intent}
 
+# @log_node_entry("suggest_action")
+# def suggest_action(state: Dict):
+#     """生成行动建议"""
+#     intent = state.get("user_intent", "")
+#     prompt = f"请基于以下推测的用户需求给出简洁但可执行的建议：\n{intent}"
 
-@log_node_entry("suggest_action")
-def suggest_action(state: Dict):
-    """生成行动建议"""
-    intent = state.get("user_intent", "")
-    prompt = f"请基于以下推测的用户需求给出简洁但可执行的建议：\n{intent}"
-
-    messages = [[HumanMessage(content=prompt)]]
-    resp = llm.generate(messages)
-    suggestion = resp.generations[0][0].text
-    state["suggestion"] = suggestion
-    return {"suggestion": suggestion}
+#     messages = [[HumanMessage(content=prompt)]]
+#     resp = llm.generate(messages)
+#     suggestion = resp.generations[0][0].text
+#     state["suggestion"] = suggestion
+#     return {"suggestion": suggestion}
 
 
 @log_node_entry("memory_write")
-def memory_write(state: Dict):
+async def memory_write(state: Dict):
     """写入新记忆"""
     session_id = state.get("session_id", "default")
     entry = state.get("new_memory_entry")
@@ -200,13 +211,20 @@ def record_feedback(state: Dict):
     }
 
 
-@log_node_entry("record_satisfied")
-def record_satisfied(state: Dict):
+@log_node_entry("record_satisfied", "记录用户的反馈")
+async def record_satisfied(state: Dict):
     """记录<满意>的反馈"""
     return record_feedback(state)
 
 
-@log_node_entry("record_unsatisfied")
-def record_unsatisfied(state: Dict):
+@log_node_entry("record_unsatisfied", "记录用户的反馈")
+async def record_unsatisfied(state: Dict):
     """记录<不满意>的反馈"""
     return record_feedback(state)
+
+
+@log_node_entry("summary_answer", "总结汇总完整回答")
+async def summary_answer(state: Dict):
+    """总结汇总回答, 目前没实际作用, 仅用来统一graph出口"""
+    return {}
+

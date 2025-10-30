@@ -3,7 +3,6 @@ import pandas as pd
 import docx
 from PyPDF2 import PdfReader
 from typing import Dict
-
 import functools
 import datetime
 import asyncio
@@ -52,28 +51,47 @@ def make_prompt(state: Dict):
     return prompt
 
 
-def log_node_entry(node_name: str = None):
+def log_node_entry(node_name: str = None, desc: str = ""):
     """装饰器：在进入节点时打印日志"""
     def decorator(func):
         name = node_name or func.__name__
 
         @functools.wraps(func)
         async def async_wrapper(state):
-            print(f"\n🟢 [{datetime.datetime.now().strftime('%H:%M:%S')}] → [{name}] enter")
-            print(f"📦 State keys: {list(state.keys()) if state else []}")
+            print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] → [{name}] enter")
+            print(f"State keys: {list(state.keys()) if state else []}")
+            session_id = state.get("session_id")
+            if desc:
+                await log_queue_manager.put_log(session_id, f"🟢正在 {desc}")
+                if node_name == "summary_answer":
+                    await log_queue_manager.put_log(session_id, None)
             result = await func(state)
-            print(f"✅ [{datetime.datetime.now().strftime('%H:%M:%S')}] → [{name}] completed\n")
+            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] → [{name}] completed\n")
             return result
-
-        @functools.wraps(func)
-        def sync_wrapper(state):
-            print(f"\n🟢 [{datetime.datetime.now().strftime('%H:%M:%S')}] → [{name}] enter")
-            print(f"📦 State keys: {list(state.keys()) if state else []}")
-            result = func(state)
-            print(f"✅ [{datetime.datetime.now().strftime('%H:%M:%S')}] → [{name}] completed\n")
-            return result
-
-        # 自动适配同步/异步节点
-        return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
-
+        return async_wrapper
     return decorator
+
+
+class LogQueueManager:
+    def __init__(self):
+        self.queues = {}  # {session_id: asyncio.Queue()}
+
+    def get_queue(self, session_id: str):
+        if session_id not in self.queues:
+            self.queues[session_id] = asyncio.Queue()
+        return self.queues[session_id]
+
+    async def put_log(self, session_id: str, message: str):
+        queue = self.get_queue(session_id)
+        await queue.put(message)
+
+    async def get_log(self, session_id: str):
+        queue = self.get_queue(session_id)
+        return await queue.get()
+
+    def remove_queue(self, session_id: str):
+        if session_id in self.queues:
+            del self.queues[session_id]
+
+
+log_queue_manager = LogQueueManager()

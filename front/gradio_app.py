@@ -65,6 +65,10 @@ with gr.Blocks() as demo:
         question_box = gr.Textbox(label="输入您的问题", placeholder="基于知识库文档提问")
         ask_btn = gr.Button("Ask")
         answer_box = gr.Textbox(label="Answer", interactive=False)
+        progress_box = gr.Textbox(label="思考进度", interactive=False)
+
+        intent_dropdown = gr.Radio(choices=[], label="选择意图", interactive=True, visible=False)
+        intent_ask_btn = gr.Button("追问", visible=False)
 
         # 反馈区域
         with gr.Row(visible=False) as feedback_row:
@@ -82,11 +86,28 @@ with gr.Blocks() as demo:
             if not sess:
                 return "请输入上传文档后返回的 session_id", gr.update(visible=False), gr.update(visible=False)
             r = api_ask(sess, q)
-            text = f"Answer:\n{r.get('answer','')}\n\nIntent:\n{r.get('user_intent','')}\n\nSuggestions:\n{r.get('suggestion','')}"
-            return text, gr.update(visible=True), gr.update(visible=False)
+            text = f"Answer:\n{r.get('answer','')}\n\nIntent:\n{r.get('user_intent',[])}\n\n"
+            return (
+                q, text, gr.update(visible=True), gr.update(visible=False), 
+                gr.update(choices=r.get('user_intent',[]), value=None, visible=bool(r.get('user_intent',[]))),
+                gr.update(visible=True)
+            )
+        
+        def get_progress(sess):
+            resp = requests.get(f"{API_URL}/get_progress?session_id={sess}", stream=True)
+            yield gr.update(value="")
+            # 用于保存日志的变量
+            result = ""
+            for line in resp.iter_lines():
+                if line:
+                    chunk = line.decode("utf-8")
+                    result += chunk + "\n"
+                    yield result  # 每次更新
 
         ask_btn.click(do_ask, inputs=[session_box, question_box],
-                      outputs=[answer_box, feedback_row, feedback_form])
+                      outputs=[question_box, answer_box, feedback_row, feedback_form, intent_dropdown, intent_ask_btn])
+        ask_btn.click(get_progress, inputs=[session_box,],
+                      outputs=[progress_box])
 
         # 满意逻辑
         def on_satisfied(sess):
@@ -100,13 +121,20 @@ with gr.Blocks() as demo:
         # 提交反馈
         def send_feedback(sess, newp):
             r = api_feedback(sess, False, newp)
-            text = f"Answer:\n{r.get('answer','')}\n\nIntent:\n{r.get('user_intent','')}\n\nSuggestions:\n{r.get('suggestion','')}"
+            text = f"Answer:\n{r.get('answer','')}\n\nIntent:\n{r.get('user_intent',[])}\n\n"
             return text
         satisfied_btn.click(on_satisfied, inputs=[session_box, ],
                             outputs=[feedback_form, feedback_result])
         unsatisfied_btn.click(on_unsatisfied, outputs=[feedback_form, feedback_result])
+        unsatisfied_btn.click(get_progress, inputs=[session_box,],
+                      outputs=[progress_box])
         submit_feedback_btn.click(send_feedback,
                                   inputs=[session_box, new_prompt_box],
                                   outputs=[answer_box])
+
+        intent_ask_btn.click(do_ask, inputs=[session_box, intent_dropdown],
+                      outputs=[question_box, answer_box, feedback_row, feedback_form, intent_dropdown, intent_ask_btn])
+        intent_ask_btn.click(get_progress, inputs=[session_box,],
+                      outputs=[progress_box])
 
 demo.launch()
