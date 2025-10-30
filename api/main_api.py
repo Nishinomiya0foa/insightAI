@@ -44,8 +44,6 @@ async def ask_question(session_id: str = Form(...), question: str = Form(...)):
     在session环境下, 提问 获取 回答
     """
     state = {"session_id": session_id, "question": question}
-    # 添加到历史
-    append_session(session_id, "user", question)
     # langGraph 实现  流程式的问答
     result = await GRAPH.ainvoke(state)
     resp = {
@@ -66,26 +64,12 @@ async def user_feedback(item: FeedbackRequest):
     - satisfied: True / False
     - 如果不满意并提供 new_prompt，将重新生成答案
     """
-    regenerated_answer = None
-    # TODO 无论是否satisfied, 都要记录下来
-    # 然后如果不satisfied, 重新生成回答, 用原问题, 要找到当前session的下一个问题
-
-    if not item.satisfied and item.new_prompt:
-        state = {"session_id": item.session_id, "question": item.question, "answer": item.answer[:120], "feedback": item.new_prompt}
-        regenerated_answer = await GRAPH.ainvoke(state)
-
-    save_feedback_memory(dict(
-        session_id=item.session_id,
-        question=item.question,
-        answer=item.answer,
-        feedback="satisfied" if item.satisfied else "unsatisfied",
-        new_prompt=item.new_prompt,
-        regenerated_answer=regenerated_answer,
-    ))
+    state = {"session_id": item.session_id, "feedback": item.feedback, "satisfied": item.satisfied}
+    regenerated_answer = await GRAPH.ainvoke(state)
 
     resp = {
         "session_id": item.session_id,
-        "question": item.new_prompt,
+        "question": regenerated_answer.get("question", ""),
         "context": regenerated_answer.get("context",""),
         "answer": regenerated_answer.get("answer",""),
         "user_intent": regenerated_answer.get("user_intent",""),

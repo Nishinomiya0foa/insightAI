@@ -10,19 +10,21 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain.messages import HumanMessage
 
-from .memory_manager import init_session, append_session, query_session_keywords
+from .memory_manager import (
+    init_session, append_session, query_session_keywords, save_feedback_memory, find_last_qa,
+    load_feedback_memory)
 from config import model, open_api_key, api_base_url, embedding_model
-from utils.agent_utils import make_prompt
-from .node_helper import make_prompt_from_feedback_memory
+from utils.agent_utils import make_prompt, log_node_entry
 
 
 llm = ChatOpenAI(model=model, temperature=0, api_key=open_api_key, openai_api_base=api_base_url)
 embeddings = OllamaEmbeddings(model=embedding_model)
 
 
+@log_node_entry("load_documents")
 def load_documents(state: Dict):
     """加载 session 的上传文档"""
-    print("load doc")
+    
     session_id = state.get("session_id", "default")
     data_dir = os.path.join("data/uploaded_files", session_id)
     docs = []
@@ -36,9 +38,10 @@ def load_documents(state: Dict):
     return {"documents": docs}
 
 
+@log_node_entry("build_vector_index")
 def build_vector_index(state: Dict):
     """构建或加载 FAISS 索引"""
-    print("build vector")
+    
     session_id = state.get("session_id", "default")
     vs_dir = os.path.join("data/vectorstore", f"{session_id}_faiss")
     docs = state.get("documents", [])
@@ -58,12 +61,12 @@ def build_vector_index(state: Dict):
     return {"vector_index_path": vs_dir}
 
 
+@log_node_entry("memory_read")
 def memory_read(state: Dict):
     """简单关键词匹配记忆"""
-    print(f"mem read")
+    
     session_id = state.get("session_id", "default")
-    # 如果有用户的feedback, 只用匹配feedback的命中, 原question的回答会直接给llm
-    q = state.get("feedback", "") or state.get("question", "")
+    q = state.get("question", "")
     if not q:
         return {}
     hits = query_session_keywords(session_id, q, top_k=3)
@@ -71,12 +74,27 @@ def memory_read(state: Dict):
     return {"memory_hits": hits}
 
 
+@log_node_entry("feedback_read")
+def feedback_read(state: Dict):
+    """统计历史反馈"""
+    
+    session_id = state.get("session_id")
+    feedbacks = load_feedback_memory(session_id)
+    feedbacks = list({d.get("feedback") for d in feedbacks[::-1] if not d.get("satisfied") and d.get("feedback")})[-10:]
+    state.update({
+        "feedbacks": feedbacks
+    })
+    
+    return {"feedbacks": feedbacks}
+
+
+@log_node_entry("retrieve_context")
 def retrieve_context(state: Dict):
     """
     根据feedback或question的内容, 获取向量结果
     """
     session_id = state.get("session_id", "default")
-    q = state.get("feedback", "") or state.get("question", "")
+    q = state.get("question", "")
     vs_dir = state.get("vector_index_path", os.path.join("data/vectorstore", f"{session_id}_faiss"))
     retrieved = []
 
@@ -96,16 +114,17 @@ def retrieve_context(state: Dict):
     return {"retrieved_docs": retrieved, "context": state["context"]}
 
 
+@log_node_entry("generate_answer")
 def generate_answer(state: Dict):
     """根据上下文生成回答，支持多轮记忆"""
     q = state.get("question", "")
     context = state.get("context", "")
     feedback = state.get("feedback", "")
+    
+    append_session(state.get("session_id"), "user", q)
 
     prompt = make_prompt(state)
-    # 从历史反馈中提取偏好
-    prompt += make_prompt_from_feedback_memory(state.get("session_id"))
-
+    # TODO few-shot之类 和 历史问答
     messages = [[HumanMessage(content=prompt)]]
     resp = llm.generate(messages)
     answer = resp.generations[0][0].text
@@ -115,9 +134,10 @@ def generate_answer(state: Dict):
     return {"answer": answer, "new_memory_entry": state["new_memory_entry"]}
 
 
+@log_node_entry("infer_intent")
 def infer_intent(state: Dict):
     """推断用户意图"""
-    q = state.get("feedback", "") or state.get("question", "")
+    q = state.get("question", "")
     context = state.get("context", "")
     prompt = f"根据用户问题和上下文，推断用户的深层意图或真实需求, 或预测用户的下一步问题（1-2 句）：\n问题：{q}\n上下文：{context}"
 
@@ -128,6 +148,7 @@ def infer_intent(state: Dict):
     return {"user_intent": intent}
 
 
+@log_node_entry("suggest_action")
 def suggest_action(state: Dict):
     """生成行动建议"""
     intent = state.get("user_intent", "")
@@ -140,6 +161,7 @@ def suggest_action(state: Dict):
     return {"suggestion": suggestion}
 
 
+@log_node_entry("memory_write")
 def memory_write(state: Dict):
     """写入新记忆"""
     session_id = state.get("session_id", "default")
@@ -148,3 +170,43 @@ def memory_write(state: Dict):
         append_session(session_id, "assistant", entry.get("answer", ""))
         append_session(session_id, "system", f"suggestion:{state.get('suggestion','')}")
     return {}
+
+
+def record_feedback(state: Dict):
+    session_id = state.get("session_id")
+    last_q, last_a = find_last_qa(session_id)
+    
+    if not last_q:
+        return False
+    save_feedback_memory(
+        dict(
+            session_id=session_id,
+            question=last_q.get("text"),
+            answer=last_a.get("text"),
+            satisfied = state.get("satisfied"),
+            feedback=state.get("feedback")
+        )
+    )
+    state.update({
+        "question": last_q.get("text"),
+        "answer": last_a.get("text"),
+        "feedback": state.get("feedback")
+    })
+    
+    return {
+        "question": last_q.get("text"),
+        "answer": last_a.get("text"),
+        "feedback": state.get("feedback")
+    }
+
+
+@log_node_entry("record_satisfied")
+def record_satisfied(state: Dict):
+    """记录<满意>的反馈"""
+    return record_feedback(state)
+
+
+@log_node_entry("record_unsatisfied")
+def record_unsatisfied(state: Dict):
+    """记录<不满意>的反馈"""
+    return record_feedback(state)

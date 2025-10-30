@@ -1,8 +1,10 @@
 
 import os, json, time
-from typing import Dict, List
+from typing import Dict, List, Tuple, Optional, Any
 
-MEM_DIR = "data/memory"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # 当前文件所在目录
+PROJECT_ROOT = os.path.dirname(BASE_DIR)  # 项目根目录
+MEM_DIR = os.path.join(PROJECT_ROOT, "data", "memory")
 os.makedirs(MEM_DIR, exist_ok=True)
 FEEDBACK_DIR = "data/feedback_memory"
 os.makedirs(FEEDBACK_DIR, exist_ok=True)
@@ -37,6 +39,32 @@ def query_session_keywords(session_id: str, query: str, top_k: int=3) -> List[Di
         scored.append((score, rec))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [rec for score, rec in scored[:top_k] if score>0]
+
+
+def find_last_qa(session_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    s = load_session(session_id)
+    history = s.get("history")
+    if not isinstance(history, list) or not history:
+        return None, None
+
+    latest_user_index = -1
+    for i in range(len(history) - 1, -1, -1):
+        if history[i].get("role") == "user":
+            latest_user_index = i
+            break
+
+    if latest_user_index == -1:
+        return None, None
+
+    # 获取找到的 "user" 字典
+    latest_user_dict = history[latest_user_index]
+
+    # 检查是否存在下一个字典
+    next_dict = None
+    if latest_user_index + 1 < len(history):
+        next_dict = history[latest_user_index + 1]
+
+    return latest_user_dict, next_dict
 
 
 def _get_memory_path(session_id: str) -> str:

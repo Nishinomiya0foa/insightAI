@@ -2,7 +2,7 @@ import gradio as gr
 import requests
 import os
 
-API_URL = "http://localhost:8000"
+API_URL = "http://localhost:8001"
 
 # 上传文档 
 def api_upload(files, session_id):
@@ -31,13 +31,11 @@ def api_ask(session_id, question):
 
 
 # 发送反馈 
-def api_feedback(session_id, question, answer, satisfied, new_prompt=None):
+def api_feedback(session_id, satisfied, new_prompt=None):
     data = {
         "session_id": session_id,
-        "question": question,
-        "answer": answer,
         "satisfied": satisfied,
-        "new_prompt": new_prompt or ""
+        "feedback": new_prompt or ""
     }
     resp = requests.post(f"{API_URL}/feedback", json=data)
     return resp.json()
@@ -90,25 +88,25 @@ with gr.Blocks() as demo:
         ask_btn.click(do_ask, inputs=[session_box, question_box],
                       outputs=[answer_box, feedback_row, feedback_form])
 
-        # 满意/不满意逻辑
-        def on_satisfied(ans):
-            return gr.update(visible=False), f"收到您的反馈, 后续将继续以您期望的方式回答问题"
+        # 满意逻辑
+        def on_satisfied(sess):
+            r = api_feedback(sess, True)
+            return gr.update(visible=True), f"收到您的反馈, 将根据您的喜好调整回答"
 
+        # 不满意逻辑
         def on_unsatisfied():
-            return gr.update(visible=True)
-
-        satisfied_btn.click(on_satisfied, inputs=[answer_box],
-                            outputs=[feedback_form, feedback_result])
-        unsatisfied_btn.click(on_unsatisfied, outputs=[feedback_form])
+            return gr.update(visible=True), f"收到您的反馈, 将根据您的喜好调整回答"
 
         # 提交反馈
-        def send_feedback(sess, q, ans, newp):
-            r = api_feedback(sess, q, ans, False, newp)
+        def send_feedback(sess, newp):
+            r = api_feedback(sess, False, newp)
             text = f"Answer:\n{r.get('answer','')}\n\nIntent:\n{r.get('user_intent','')}\n\nSuggestions:\n{r.get('suggestion','')}"
             return text
-
+        satisfied_btn.click(on_satisfied, inputs=[session_box, ],
+                            outputs=[feedback_form, feedback_result])
+        unsatisfied_btn.click(on_unsatisfied, outputs=[feedback_form, feedback_result])
         submit_feedback_btn.click(send_feedback,
-                                  inputs=[session_box, question_box, answer_box, new_prompt_box],
+                                  inputs=[session_box, new_prompt_box],
                                   outputs=[answer_box])
 
 demo.launch()
