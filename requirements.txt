@@ -9,7 +9,9 @@ faiss-cpu
 tiktoken
 python-multipart
 langchain-community
+langchain-core
 PyPDF2
 python-docx
 pandas
+langchain-ollama
 
